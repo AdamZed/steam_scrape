@@ -1,2 +1,7 @@
 # test files
 file.txt
+
+# input/output files
+candidates.txt
+scraped_apps.txt
+data/*

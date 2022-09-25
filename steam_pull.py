@@ -1,8 +1,11 @@
-from typing import Set
+import csv
+import time
+import re
+from venv import create
 from bs4 import BeautifulSoup
 import requests
 
-USE_TEST_FILE = True
+USE_TEST_FILE = False
 TEST_FILE = "file.txt"
 
 def get_app_body(url):
@@ -13,13 +16,15 @@ def get_app_body(url):
             soup = BeautifulSoup(f.read(), features="html.parser")
 
     if soup is None:
-        exit(-1)
+        print(f'failed link req: {url}')
     return soup
 
 
-def get_app_stats(app_body):
-    app_stats = { }
-    
+def get_app_stats(app_body, app_url):
+    app_stats = { "url": app_url }
+    app_id = re.search(r"app\/([0-9]*)\/", app_url).group(1)
+    app_stats['id'] = app_id
+
     info_panel = app_body.find("div", {"class": "glance_ctn_responsive_left"})
 
     # get app title
@@ -39,6 +44,14 @@ def get_app_stats(app_body):
     current_price = app_body.find("meta", {"itemprop": "price"})["content"]
     app_stats["current_price"] = current_price
 
+    price_section = app_body.find("div", {"class": "game_area_purchase_game_wrapper"})
+    original_price_div = price_section.find("div", {"class": "discount_original_price"})
+    if original_price_div:
+        original_price = original_price_div.text[5:]
+        app_stats["original_price"] = original_price
+    else:
+        app_stats["original_price"] = current_price
+
     # search for devs/publishers
     devs = [l for l in info_panel.find_all("a") if "/developer/" in l['href']]
     pubs = [l for l in info_panel.find_all("a") if "/publisher/" in l['href']]
@@ -57,7 +70,10 @@ def get_app_stats(app_body):
         external_links.add(clean_steam_redirect(
             possible_web_links[0]['href']))
 
-    app_stats["socials"] = scrape_links_for_socials(external_links)
+    app_stats.update(scrape_links_for_socials(external_links))
+
+    # get monthly average and peak players
+    app_stats["monthly_avg"], app_stats["monthly_peak"] = get_month_player_stats(app_id)
 
     return app_stats
 
@@ -96,11 +112,26 @@ def scrape_links_for_socials(links):
     for link in socials["contact_pages"]:
         check_socials(link, socials, is_contact_page=True)
 
+    for k in socials:
+        if len(socials[k]) == 0: socials[k] = "N/A"
+        else: socials[k] = " | ".join(socials[k])
     return socials
 
+
+STEAMCHART_URL = "https://steamcharts.com/app/"
+def get_month_player_stats(app_id):
+    soup = request_page_soup(f'{STEAMCHART_URL}{app_id}')
+    if not soup:
+        return "N/A", "N/A"
+    chart_rows = soup.find("tbody").find("tr", {"class": "odd"}).find_all("td")
+    return (chart_rows[1].text, chart_rows[4].text)
+
+
+CANDI_FILE = "candidates.txt"
 def get_app_candidates():
-    # TODO add candidate file and pull names from
-    return ["https://store.steampowered.com/app/991170/Barn_Finders/"]
+    with open(CANDI_FILE) as f:
+        candidates = [l.strip() for l in f.readlines()]
+    return candidates
 
 
 RED_URL_PREF = "https://steamcommunity.com/linkfilter/?url="
@@ -110,42 +141,52 @@ def clean_steam_redirect(red_url):
     return red_url
 
 
-def get_csv_entry_for_stats(stats):
-    # TODO
-    pass
+FIELDS = ['url', 'id', 'title', 'release_date', 'developers', 'publishers', 'linkedins', 'mailtos', 'contact_pages', 'current_price', 'original_price', 'total_reviews', 'review_score', 'monthly_avg', 'monthly_peak']
+def flush_buffer_to_csv(buffer, file_name):
+    with open(file_name, 'a', newline='', encoding="utf-8") as csvfile:
+        writer = csv.DictWriter(csvfile, fieldnames=FIELDS)
+        for row in buffer: writer.writerow(row)
+    with open("scraped_apps.txt", 'a') as f:
+        for row in buffer: f.write(f'{row["id"]}\n')
+    buffer.clear() 
+
+def create_csv(file_name):
+    with open(file_name, 'w', newline='', encoding="utf-8") as csvfile:
+        writer = csv.DictWriter(csvfile, fieldnames=FIELDS)
+        writer.writeheader()
 
 
-def flush_buffer(buffer):
-    # TODO
-    pass
-
-
-MAX_BUFFER = 10
-def do_work(candidates):
+MAX_BUFFER = 1
+def do_work(steam_urls):
     buffer = []
+    data_file_name = f'data/data_{int(time.time())}.csv'
+    create_csv(data_file_name)
 
-    for candi in candidates:
-        print(f"fetching {candi}")
-        candi_dom = get_app_body(candi)
-        candi_stats = get_app_stats(candi_dom)
+    for steam_app_url in steam_urls:
+        print(f"fetching {steam_app_url}")
+        st_app_dom = get_app_body(steam_app_url)
+        if not st_app_dom:
+            print("failed to fetch, stopping")
+            flush_buffer_to_csv(buffer)
+            exit(-1)
 
-        print(candi_stats)
-
-        data_entry = get_csv_entry_for_stats(candi_stats)
+        data_entry = get_app_stats(st_app_dom, steam_app_url)
         buffer.append(data_entry)
         if len(buffer) >= MAX_BUFFER:
-            flush_buffer(buffer)
+            flush_buffer_to_csv(buffer, data_file_name)
+    
+    flush_buffer_to_csv(buffer, data_file_name)
 
 def request_page_soup(url):
     req = requests.get(url)
     if req.status_code != 200:
-        print(f'failed link req: {url}')
         return None
     return BeautifulSoup(req.text, features="html.parser")
     
 def main():
-    candidates = get_app_candidates()
-    do_work(candidates)
+    
+    steam_urls = get_app_candidates()
+    do_work(steam_urls)
 
 
 if __name__ == "__main__":
