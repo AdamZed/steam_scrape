@@ -1,20 +1,11 @@
 import csv
 import time
 import re
-from venv import create
 from bs4 import BeautifulSoup
 import requests
 
-USE_TEST_FILE = False
-TEST_FILE = "file.txt"
-
 def get_app_body(url):
-    if not USE_TEST_FILE:
-        soup = request_page_soup(url)
-    else:
-        with open(TEST_FILE, encoding="utf-8") as f:
-            soup = BeautifulSoup(f.read(), features="html.parser")
-
+    soup = request_page_soup(url)
     if soup is None:
         print(f'failed link req: {url}')
     return soup
@@ -184,7 +175,6 @@ def request_page_soup(url):
     return BeautifulSoup(req.text, features="html.parser")
     
 def main():
-    
     steam_urls = get_app_candidates()
     do_work(steam_urls)
 
