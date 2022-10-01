@@ -1,7 +1,13 @@
 # test files
 file.txt
+pull_random.py
 
 # input/output files
 candidates.txt
 scraped_apps.txt
+app_list.json
 data/*
+allapps.json
+
+#binaries
+__pycache__

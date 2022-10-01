@@ -11,10 +11,13 @@ def get_app_body(url):
     return soup
 
 
+def get_app_id_from_url(app_url):
+    return re.search(r"app\/([0-9]*)\/", app_url).group(1)
+    
+    
 def get_app_stats(app_body, app_url):
     app_stats = { "url": app_url }
-    app_id = re.search(r"app\/([0-9]*)\/", app_url).group(1)
-    app_stats['id'] = app_id
+    app_stats['id'] = get_app_id_from_url(app_url)
 
     info_panel = app_body.find("div", {"class": "glance_ctn_responsive_left"})
 
@@ -22,50 +25,66 @@ def get_app_stats(app_body, app_url):
     title = app_body.find(id="appHubAppName").text
     app_stats["title"] = title
 
-    # get review scores
-    review_info = { i["itemprop"]: i["content"] for i in info_panel.find_all("meta") }
-    app_stats["total_reviews"] = review_info["reviewCount"]
-    app_stats["review_score"] = review_info["ratingValue"]
-
     # get release date
-    release_date = info_panel.find("div", {"class": "release_date"}).find("div", {"class": "date"}).text
-    app_stats["release_date"] = release_date
+    release_date = info_panel.find("div", {"class": "release_date"})
+    if release_date: app_stats["release_date"] = release_date.find("div", {"class": "date"}).text
     
-    # get price
-    current_price = app_body.find("meta", {"itemprop": "price"})["content"]
-    app_stats["current_price"] = current_price
-
-    price_section = app_body.find("div", {"class": "game_area_purchase_game_wrapper"})
-    original_price_div = price_section.find("div", {"class": "discount_original_price"})
-    if original_price_div:
-        original_price = original_price_div.text[5:]
-        app_stats["original_price"] = original_price
-    else:
-        app_stats["original_price"] = current_price
-
     # search for devs/publishers
-    devs = [l for l in info_panel.find_all("a") if "/developer/" in l['href']]
-    pubs = [l for l in info_panel.find_all("a") if "/publisher/" in l['href']]
+    dev_list = info_panel.find(id="developers_list")
+    devs = [l for l in dev_list.find_all("a")]
+    pubs = [l for l in info_panel.find_all("a") if l not in devs]
     app_stats["developers"] = ", ".join((d.text for d in devs))
     app_stats["publishers"] = ", ".join((p.text for p in pubs))
 
     steam_dev_links = set()
-    for link in devs: steam_dev_links.add(link["href"])
-    for link in pubs: steam_dev_links.add(link["href"])
+    for link in devs:
+        if "/developer/" not in link and "/curator/" not in link: continue
+        steam_dev_links.add(link["href"])
+    for link in pubs:
+        if "/publisher/" not in link and "/curator/" not in link: continue
+        steam_dev_links.add(link["href"])
     external_links = find_sites_for_steamdevs(steam_dev_links)
 
     # search for game website
     page_links = app_body.find_all("a", {"class": "linkbar"})
     possible_web_links = [lk for lk in page_links if "Visit the website" in lk.text]
     if len(possible_web_links) > 0:
-        external_links.add(clean_steam_redirect(
-            possible_web_links[0]['href']))
+        game_site = clean_steam_redirect(
+            possible_web_links[0]['href'])
+        external_links.add(game_site)
+        app_stats["game_site"] = game_site
 
     app_stats.update(scrape_links_for_socials(external_links))
+    
+    try:
+        # get review scores
+        review_info = { i["itemprop"]: i["content"] for i in info_panel.find_all("meta") }
 
-    # get monthly average and peak players
-    app_stats["monthly_avg"], app_stats["monthly_peak"] = get_month_player_stats(app_id)
+        if "reviewCount" in review_info:
+            app_stats["total_reviews"] = review_info["reviewCount"]
+            app_stats["review_score"] = review_info["ratingValue"]
 
+        # get price
+        current_price = app_body.find("meta", {"itemprop": "price"})["content"]
+        app_stats["current_price"] = current_price
+
+        price_section = app_body.find("div", {"class": "game_area_purchase_game_wrapper"})
+        if price_section:
+            original_price_div = price_section.find("div", {"class": "discount_original_price"})
+            if original_price_div:
+                original_price = original_price_div.text[5:]
+                app_stats["original_price"] = original_price
+            else:
+                app_stats["original_price"] = current_price
+        else:
+            app_stats["original_price"] = current_price
+
+        # get monthly average and peak players
+        app_stats["monthly_avg"], app_stats["monthly_peak"] = get_month_player_stats(app_url)
+
+    except (AttributeError, TypeError):
+        pass
+    
     return app_stats
 
 
@@ -82,10 +101,14 @@ def find_sites_for_steamdevs(steam_dev_links):
 
 def check_socials(link, socials, is_contact_page=False):
     soup = request_page_soup(link)
+    if soup is None:
+        socials["contact_pages"].add(link)
+        return
+
     page_links = soup.find_all("a", {'href': True})
     for l in page_links:
         href = l["href"]
-        if not is_contact_page and "contact" in l.text.lower():
+        if not is_contact_page and "contact" in l.text.lower() and not href.startswith("mailto:"):
             if not href.startswith("http"): href = link + href
             if not href.startswith("https"): href = href.replace("http", "https")
             socials["contact_pages"].add(href)
@@ -132,10 +155,10 @@ def clean_steam_redirect(red_url):
     return red_url
 
 
-FIELDS = ['url', 'id', 'title', 'release_date', 'developers', 'publishers', 'linkedins', 'mailtos', 'contact_pages', 'current_price', 'original_price', 'total_reviews', 'review_score', 'monthly_avg', 'monthly_peak']
+FIELDS = ['url', 'id', 'title', 'release_date', 'developers', 'publishers', 'linkedins', 'mailtos', 'contact_pages', 'game_site', 'current_price', 'original_price', 'total_reviews', 'review_score', 'monthly_avg', 'monthly_peak']
 def flush_buffer_to_csv(buffer, file_name):
     with open(file_name, 'a', newline='', encoding="utf-8") as csvfile:
-        writer = csv.DictWriter(csvfile, fieldnames=FIELDS)
+        writer = csv.DictWriter(csvfile, restval='', fieldnames=FIELDS)
         for row in buffer: writer.writerow(row)
     with open("scraped_apps.txt", 'a') as f:
         for row in buffer: f.write(f'{row["id"]}\n')
@@ -169,7 +192,10 @@ def do_work(steam_urls):
     flush_buffer_to_csv(buffer, data_file_name)
 
 def request_page_soup(url):
-    req = requests.get(url)
+    try:
+        req = requests.get(url)
+    except Exception:
+        return None
     if req.status_code != 200:
         return None
     return BeautifulSoup(req.text, features="html.parser")
