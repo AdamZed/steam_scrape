@@ -22,8 +22,9 @@ def get_app_stats(app_body, app_url):
     info_panel = app_body.find("div", {"class": "glance_ctn_responsive_left"})
 
     # get app title
-    title = app_body.find(id="appHubAppName").text
-    app_stats["title"] = title
+    title = app_body.find(id="appHubAppName")
+    if not title: return None # page probably blocked by account sign in
+    app_stats["title"] = title.text
 
     # get release date
     release_date = info_panel.find("div", {"class": "release_date"})
@@ -80,7 +81,7 @@ def get_app_stats(app_body, app_url):
             app_stats["original_price"] = current_price
 
         # get monthly average and peak players
-        app_stats["monthly_avg"], app_stats["monthly_peak"] = get_month_player_stats(app_url)
+        #app_stats["monthly_avg"], app_stats["monthly_peak"] = get_month_player_stats(app_url)
 
     except (AttributeError, TypeError):
         pass
@@ -170,7 +171,7 @@ def create_csv(file_name):
         writer.writeheader()
 
 
-MAX_BUFFER = 1
+MAX_BUFFER = 10
 def do_work(steam_urls):
     buffer = []
     data_file_name = f'data/data_{int(time.time())}.csv'
@@ -185,15 +186,20 @@ def do_work(steam_urls):
             exit(-1)
 
         data_entry = get_app_stats(st_app_dom, steam_app_url)
+        if not data_entry: continue
+
         buffer.append(data_entry)
         if len(buffer) >= MAX_BUFFER:
             flush_buffer_to_csv(buffer, data_file_name)
     
     flush_buffer_to_csv(buffer, data_file_name)
 
+HEADERS = {'User-Agent': "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:101.0) Gecko/20100101 Firefox/101.0"}
+COOKIES = {'birthtime': '568022401'}
+
 def request_page_soup(url):
     try:
-        req = requests.get(url)
+        req = requests.get(url, headers=HEADERS, cookies=COOKIES)
     except Exception:
         return None
     if req.status_code != 200:
