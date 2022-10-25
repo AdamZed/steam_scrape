@@ -1,12 +1,7 @@
-# pull candidates from steam store
-
 import json
-from re import S
 import sys
-import requests
-from bs4 import BeautifulSoup
 
-from steam_pull import request_page_soup
+from scrape_util import request_page_soup
 
 applist = set()
 donelist = []

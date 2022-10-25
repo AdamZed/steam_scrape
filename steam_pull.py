@@ -1,8 +1,6 @@
-import csv
 import time
 import re
-from bs4 import BeautifulSoup
-import requests
+from scrape_util import create_csv, flush_buffer_to_csv, request_page_soup, scrape_links_for_socials
 
 def get_app_body(url):
     soup = request_page_soup(url)
@@ -98,39 +96,6 @@ def find_sites_for_steamdevs(steam_dev_links):
         if curator_url:
             links.add(clean_steam_redirect(curator_url["href"]))
     return links 
-            
-
-def check_socials(link, socials, is_contact_page=False):
-    soup = request_page_soup(link)
-    if soup is None:
-        socials["contact_pages"].add(link)
-        return
-
-    page_links = soup.find_all("a", {'href': True})
-    for l in page_links:
-        href = l["href"]
-        if not is_contact_page and "contact" in l.text.lower() and not href.startswith("mailto:"):
-            if not href.startswith("http"): href = link + href
-            if not href.startswith("https"): href = href.replace("http", "https")
-            socials["contact_pages"].add(href)
-        if "mailto:" in href:
-            socials["mailtos"].add(href)
-        elif "linkedin" in href:
-            socials["linkedins"].add(href)
-
-def scrape_links_for_socials(links):
-    socials = {"linkedins": set(), "mailtos": set(), "contact_pages": set()}
-    
-    for link in links:
-        check_socials(link, socials)
-    
-    for link in socials["contact_pages"]:
-        check_socials(link, socials, is_contact_page=True)
-
-    for k in socials:
-        if len(socials[k]) == 0: socials[k] = "N/A"
-        else: socials[k] = " | ".join(socials[k])
-    return socials
 
 
 STEAMCHART_URL = "https://steamcharts.com/app/"
@@ -157,32 +122,18 @@ def clean_steam_redirect(red_url):
 
 
 FIELDS = ['url', 'id', 'title', 'release_date', 'developers', 'publishers', 'linkedins', 'mailtos', 'contact_pages', 'game_site', 'current_price', 'original_price', 'total_reviews', 'review_score', 'monthly_avg', 'monthly_peak']
-def flush_buffer_to_csv(buffer, file_name):
-    with open(file_name, 'a', newline='', encoding="utf-8") as csvfile:
-        writer = csv.DictWriter(csvfile, restval='', fieldnames=FIELDS)
-        for row in buffer: writer.writerow(row)
-    with open("scraped_apps.txt", 'a') as f:
-        for row in buffer: f.write(f'{row["id"]}\n')
-    buffer.clear() 
-
-def create_csv(file_name):
-    with open(file_name, 'w', newline='', encoding="utf-8") as csvfile:
-        writer = csv.DictWriter(csvfile, fieldnames=FIELDS)
-        writer.writeheader()
-
-
 MAX_BUFFER = 10
 def do_work(steam_urls):
     buffer = []
     data_file_name = f'data/data_{int(time.time())}.csv'
-    create_csv(data_file_name)
+    create_csv(data_file_name, FIELDS)
 
     for steam_app_url in steam_urls:
         print(f"fetching {steam_app_url}")
         st_app_dom = get_app_body(steam_app_url)
         if not st_app_dom:
             print("failed to fetch, stopping")
-            flush_buffer_to_csv(buffer)
+            flush_buffer_to_csv(buffer, data_file_name, FIELDS)
             exit(-1)
 
         data_entry = get_app_stats(st_app_dom, steam_app_url)
@@ -190,21 +141,9 @@ def do_work(steam_urls):
 
         buffer.append(data_entry)
         if len(buffer) >= MAX_BUFFER:
-            flush_buffer_to_csv(buffer, data_file_name)
+            flush_buffer_to_csv(buffer, data_file_name, FIELDS)
     
-    flush_buffer_to_csv(buffer, data_file_name)
-
-HEADERS = {'User-Agent': "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:101.0) Gecko/20100101 Firefox/101.0"}
-COOKIES = {'birthtime': '568022401'}
-
-def request_page_soup(url):
-    try:
-        req = requests.get(url, headers=HEADERS, cookies=COOKIES)
-    except Exception:
-        return None
-    if req.status_code != 200:
-        return None
-    return BeautifulSoup(req.text, features="html.parser")
+    flush_buffer_to_csv(buffer, data_file_name, FIELDS)
     
 def main():
     steam_urls = get_app_candidates()
